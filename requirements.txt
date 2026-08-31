@@ -1,0 +1,14 @@
+# Core (always required)
+litellm
+tomli; python_version < "3.11"   # tomllib is stdlib from 3.11+; needed on 3.10 (MinerU's Windows wheel requires 3.10-3.12)
+
+# Web crawling (`ingest web`) — after installing, run: crawl4ai-setup
+crawl4ai
+
+# Paper search + download (`ingest papers`)
+paper-search-mcp
+
+# Directory ingestion (`ingest dir`) also needs these external CLIs, NOT pip-installable:
+#   - Node.js 20+ (for `npx @firecrawl/anydoc`, office docs + text-layer PDFs)
+#   - mineru: pip install "mineru[pipeline]"  (OCR fallback for scanned PDFs, CPU-only backend)
+#     Windows wheel requires Python 3.10-3.12 — use a dedicated venv if your default is 3.13+.

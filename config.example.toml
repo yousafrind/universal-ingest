@@ -1,0 +1,39 @@
+# Copy to config.toml and edit. Nothing here requires code changes to switch providers —
+# it's the whole point of the design. If config.toml doesn't exist, the tool falls back
+# to this same DeepSeek default automatically.
+
+[vlm.default]
+model = "deepseek/deepseek-vl"
+api_key_env = "DEEPSEEK_API_KEY"
+
+# --- alternates: uncomment ONE of these to replace [vlm.default] above ---
+
+# [vlm.default]
+# model = "openrouter/anthropic/claude-3.5-sonnet"
+# api_key_env = "OPENROUTER_API_KEY"
+
+# [vlm.default]
+# model = "openai/gpt-4o"
+# api_key_env = "OPENAI_API_KEY"
+
+# [vlm.default]
+# model = "anthropic/claude-3-5-sonnet"
+# api_key_env = "ANTHROPIC_API_KEY"
+
+# [vlm.default]                     # fully local, no cloud, no API key
+# model = "openai/llava"            # NIM / vLLM / Ollama all speak this shape once given api_base
+# api_base = "http://localhost:8000/v1"
+
+# Optional second attempt if [vlm.default] fails or times out.
+[vlm.fallback]
+model = "openrouter/anthropic/claude-3.5-sonnet"
+api_key_env = "OPENROUTER_API_KEY"
+
+[crawl]
+max_depth = 2
+max_pages = 200
+respect_robots_txt = true
+
+[papers]
+default_sources = ["arxiv", "semantic", "openalex"]
+default_limit = 20

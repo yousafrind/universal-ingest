@@ -1,0 +1,28 @@
+# Virtual environments — never commit these, they're huge (tens of thousands of files)
+.venv/
+venv/
+env/
+
+# Secrets — config.toml holds real API keys once you copy it from config.example.toml
+config.toml
+.env
+
+# Runtime cache
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Working directories the tool creates at runtime
+_downloads/
+*_assets/
+*_mineru/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
