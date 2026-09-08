@@ -17,20 +17,18 @@ LANG_BY_EXT = {
     ".json": "json", ".toml": "toml", ".ini": "ini", ".cfg": "ini",
 }
 
-# Everything anydoc's real --help lists as a supported input (verified 2026-08-26).
-ANYDOC_EXTS = {
+# Everything kreuzberg (tier 1, see convert.py) natively understands — a much wider
+# net than the old anydoc-only list, including LaTeX/BibTeX/Jupyter/email, which was
+# the actual "jungle of formats" gap anydoc never covered.
+DOCUMENT_EXTS = {
     ".doc", ".docx", ".docm", ".odt", ".rtf", ".epub", ".pdf",
     ".ppt", ".pps", ".pot", ".pptx", ".pptm", ".ppsx", ".ppsm", ".odp",
     ".xls", ".xlsx", ".xlsm", ".xlsb", ".ods", ".csv",
+    ".tex", ".bib", ".ipynb", ".eml", ".msg",
 }
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"}
 
 SKIP_DIR_NAMES = {".git", "node_modules", "__pycache__", ".venv", "venv", ".idea", ".cache"}
-
-# anydoc's documented behavior: scanned/image-only PDFs are not silently mangled,
-# they exit 1 with a message naming OCR/scanning as the reason. We key off that
-# instead of a text-length heuristic, since anydoc itself already knows.
-ANYDOC_SCANNED_MARKERS = ("ocr", "scan")
 
 
 def route(path: Path) -> str:
@@ -39,14 +37,9 @@ def route(path: Path) -> str:
         return "passthrough"
     if ext in IMAGE_EXTS:
         return "image"
-    if ext in ANYDOC_EXTS:
-        return "anydoc"
+    if ext in DOCUMENT_EXTS:
+        return "document"
     return "skip"
-
-
-def is_scanned_pdf_error(stderr: str) -> bool:
-    lowered = stderr.lower()
-    return any(marker in lowered for marker in ANYDOC_SCANNED_MARKERS)
 
 
 def should_skip_dir(path: Path) -> bool:

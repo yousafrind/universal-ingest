@@ -1,10 +1,13 @@
-"""Orchestration. Three entry points (ingest_directory / ingest_web / ingest_papers),
-all converging on the same classify -> convert -> normalize spine and the same output
-contract: mirrored tree of <name>.md (+ <name>_assets/ if there are images) + index.md.
+"""Orchestration. Four entry points (ingest_directory / ingest_web / ingest_wiki /
+ingest_papers), all converging on the same classify -> convert -> normalize spine and
+the same output contract: mirrored tree of <name>.md (+ <name>_assets/ if there are
+images) + index.md. ingest_wiki additionally folds every crawled site into one
+consolidated per-site markdown file instead of one file per page.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from . import acquire_papers, acquire_web, convert, normalize
@@ -16,11 +19,22 @@ def ingest_directory(source: Path, output: Path, config: Config, ocr_images: boo
     entries: list[tuple[str, Path]] = []
     failures: list[str] = []
 
-    for src in sorted(source.rglob("*")):
-        if src.is_dir() or should_skip_dir(src):
+    # Path.rglob("*") on a file (not a directory) or a nonexistent path silently
+    # yields nothing — no exception. Without this check, pointing `source` at a
+    # single PDF/doc, or a typo'd directory name, produces a quietly empty index
+    # instead of either processing the file or failing loudly.
+    if not source.exists():
+        return [f"source path does not exist: {source}"]
+    if source.is_file():
+        files = [source]
+    else:
+        files = sorted(p for p in source.rglob("*") if not p.is_dir())
+
+    for src in files:
+        if should_skip_dir(src):
             continue
 
-        rel = src.relative_to(source)
+        rel = src.relative_to(source) if source.is_dir() else Path(src.name)
         kind = route(src)
 
         if dry_run:
@@ -39,22 +53,15 @@ def ingest_directory(source: Path, output: Path, config: Config, ocr_images: boo
             import shutil as _shutil
             _shutil.copy2(src, assets_dir / src.name)
             normalize.write_markdown(out_md, convert.convert_image_stub(src, f"{assets_dir.name}/{src.name}"))
-        elif kind == "anydoc":
-            text, err = convert.convert_anydoc(src, out_md)
-            if text is not None:
-                assets_dir = output / rel.parent / f"{src.stem}_assets"
-                normalized = normalize.extract_inline_images(text, assets_dir)
-                normalize.write_markdown(out_md, normalized)
-            elif err == "scanned":
-                mineru_dir = output / rel.parent / f"{src.stem}_mineru"
-                mineru_md, mineru_err = convert.convert_mineru(src, mineru_dir)
-                if mineru_md is None:
-                    failures.append(f"{rel}: {mineru_err}")
-                    continue
-                out_md = mineru_md  # keep mineru's own layout (and its images/ folder) as-is
-            else:
+        elif kind == "document":
+            assets_dir = output / rel.parent / f"{src.stem}_assets"
+            doc, err = convert.convert_document(src, output / rel.parent, config, assets_dir.name)
+            if doc is None:
                 failures.append(f"{rel}: {err}")
                 continue
+            normalize.write_document_assets(assets_dir, doc.assets)
+            body = normalize.extract_inline_images(doc.to_markdown(), assets_dir)
+            normalize.write_markdown(out_md, body)
         else:
             continue
 
@@ -99,6 +106,70 @@ def ingest_web(url: str, output: Path, config: Config) -> list[str]:
     return []
 
 
+def ingest_wiki(urls: list[str], output: Path, config: Config) -> list[str]:
+    """Batch mode: one seed URL -> one crawl -> one consolidated markdown "wiki" file
+    per site, folding in every linked document (PDF/DOCX/etc) it can find, converted
+    through the same tiered convert.convert_document() as `ingest dir`."""
+    failures: list[str] = []
+    entries: list[tuple[str, Path]] = []
+    output.mkdir(parents=True, exist_ok=True)
+
+    for url in urls:
+        pages, err = acquire_web.crawl_site(url, config.crawl.max_depth, config.crawl.max_pages)
+        if err:
+            failures.append(f"{url}: {err}")
+            continue
+        if not pages:
+            failures.append(f"{url}: crawl returned no pages")
+            continue
+
+        site_slug = pages[0]["slug"].split("/")[0] or "site"
+        out_md = output / f"{site_slug}.md"
+        assets_dir = output / f"{site_slug}_assets"
+
+        sections = [f"# {url}\n\n*LLM wiki generated from {len(pages)} crawled page(s).*\n"]
+        sections.append("## Pages\n\n" + "\n".join(f"- [{p['url']}](#{_anchor(p['url'])})" for p in pages))
+
+        download_urls: list[str] = []
+        seen_downloads: set[str] = set()
+        for page in pages:
+            for d in page.get("downloads", []):
+                if d not in seen_downloads:
+                    seen_downloads.add(d)
+                    download_urls.append(d)
+
+        for page in pages:
+            body = normalize.extract_inline_images(page["markdown"], assets_dir)
+            sections.append(f"\n---\n\n## {page['url']}\n\n{body}")
+
+        if download_urls:
+            sections.append("\n---\n\n## Downloaded documents\n")
+        staging = output / f"{site_slug}_downloads"
+        for durl in download_urls:
+            path, derr = acquire_web.download_file(durl, staging)
+            if path is None:
+                failures.append(f"{durl}: {derr}")
+                continue
+            doc, cerr = convert.convert_document(path, output / f"{site_slug}_work", config, assets_dir.name)
+            if doc is None:
+                failures.append(f"{durl}: {cerr}")
+                continue
+            normalize.write_document_assets(assets_dir, doc.assets)
+            body = normalize.extract_inline_images(doc.to_markdown(), assets_dir)
+            sections.append(f"\n### {durl}\n\n{body}")
+
+        normalize.write_markdown(out_md, "\n".join(sections), metadata={"source_url": url})
+        entries.append((url, out_md))
+
+    normalize.build_index(output, entries)
+    normalize.write_failures(output, failures)
+    return failures
+
+
+def _anchor(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
 def ingest_papers(query: str, output: Path, config: Config, sources: list[str] | None = None, limit: int | None = None) -> list[str]:
     sources = sources or config.papers.default_sources
     limit = limit or config.papers.default_limit
@@ -128,23 +199,14 @@ def ingest_papers(query: str, output: Path, config: Config, sources: list[str] |
             "url": paper.get("url", ""),
         }
 
-        text, cerr = convert.convert_anydoc(pdf_path, out_md)
-        if text is not None:
-            assets_dir = output / f"{slug}_assets"
-            normalized = normalize.extract_inline_images(text, assets_dir)
-            normalize.write_markdown(out_md, normalized, metadata=metadata)
-        elif cerr == "scanned":
-            mineru_dir = output / f"{slug}_mineru"
-            mineru_md, merr = convert.convert_mineru(pdf_path, mineru_dir)
-            if mineru_md is None:
-                failures.append(f"{paper['title']}: {merr}")
-                continue
-            existing = mineru_md.read_text(encoding="utf-8", errors="replace")
-            normalize.write_markdown(mineru_md, existing, metadata=metadata)
-            out_md = mineru_md
-        else:
-            failures.append(f"{paper['title']}: {cerr}")
+        assets_dir = output / f"{slug}_assets"
+        doc, derr2 = convert.convert_document(pdf_path, output / f"{slug}_work", config, assets_dir.name)
+        if doc is None:
+            failures.append(f"{paper['title']}: {derr2}")
             continue
+        normalize.write_document_assets(assets_dir, doc.assets)
+        body = normalize.extract_inline_images(doc.to_markdown(), assets_dir)
+        normalize.write_markdown(out_md, body, metadata=metadata)
 
         entries.append((paper.get("title", slug), out_md))
 

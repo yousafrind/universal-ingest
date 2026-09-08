@@ -20,10 +20,13 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.toml"
 @dataclass
 class VLMRole:
     model: str
-    api_key_env: str | None = None
+    api_key: str | None = None  # inline in config.toml (gitignored) — simplest for local use
+    api_key_env: str | None = None  # or read from an env var instead
     api_base: str | None = None
 
     def resolve_api_key(self) -> str | None:
+        if self.api_key:
+            return self.api_key
         return os.environ.get(self.api_key_env) if self.api_key_env else None
 
 
@@ -56,7 +59,7 @@ def load_config(path: Path | None = None) -> Config:
     if not path.exists():
         # No config file yet -> ship a working default (DeepSeek), matching config.example.toml.
         return Config(
-            vlm={"default": VLMRole(model="deepseek/deepseek-vl", api_key_env="DEEPSEEK_API_KEY")},
+            vlm={"default": VLMRole(model="deepseek/deepseek-v4-flash-vision-exp", api_key_env="DEEPSEEK_API_KEY")},
             crawl=CrawlConfig(),
             papers=PapersConfig(),
         )
@@ -68,13 +71,14 @@ def load_config(path: Path | None = None) -> Config:
     vlm = {
         role: VLMRole(
             model=cfg["model"],
+            api_key=cfg.get("api_key"),
             api_key_env=cfg.get("api_key_env"),
             api_base=cfg.get("api_base"),
         )
         for role, cfg in vlm_raw.items()
     }
     if not vlm:
-        vlm = {"default": VLMRole(model="deepseek/deepseek-vl", api_key_env="DEEPSEEK_API_KEY")}
+        vlm = {"default": VLMRole(model="deepseek/deepseek-v4-flash-vision-exp", api_key_env="DEEPSEEK_API_KEY")}
 
     crawl_raw = raw.get("crawl", {})
     crawl = CrawlConfig(

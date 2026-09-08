@@ -4,8 +4,9 @@ import argparse
 from pathlib import Path
 
 from . import pipeline
-from .classify import is_scanned_pdf_error, route
+from .classify import route
 from .config import load_config
+from .document import Document, Page
 from .normalize import extract_inline_images, render_frontmatter
 
 
@@ -13,14 +14,23 @@ def selftest() -> None:
     # routing (pure logic, no I/O)
     assert route(Path("main.py")) == "passthrough"
     assert route(Path("readme.MD")) == "passthrough"
-    assert route(Path("report.docx")) == "anydoc"
-    assert route(Path("report.PDF")) == "anydoc"
+    assert route(Path("report.docx")) == "document"
+    assert route(Path("report.PDF")) == "document"
+    assert route(Path("notes.tex")) == "document"
     assert route(Path("photo.png")) == "image"
     assert route(Path("archive.zip")) == "skip"
 
-    # anydoc's real "scanned PDF" error signal (verified string from live --help output)
-    assert is_scanned_pdf_error("Scanned or image-only PDFs need OCR, which anydoc does not do") is True
-    assert is_scanned_pdf_error("usage error: unknown option") is False
+    # Document: the page-scoped data model tier 1/2/3 all read and write.
+    doc = Document(pages=[
+        Page(index=1, text="real content here", source="kreuzberg"),
+        Page(index=2, text="  ", source="kreuzberg"),  # scanned page kreuzberg couldn't read
+    ])
+    assert doc.low_content_pages(min_chars=5) == [2]
+    doc.pages[1].text = "OCR'd content"
+    doc.pages[1].source = "mineru"
+    assert doc.low_content_pages(min_chars=5) == []
+    assert "real content here" in doc.to_markdown()
+    assert "OCR'd content" in doc.to_markdown()
 
     # normalize: inline base64 image extraction
     import tempfile
@@ -42,7 +52,7 @@ def selftest() -> None:
     assert "default" in config.vlm
     assert config.vlm["default"].model.startswith("deepseek/")
 
-    print("selftest: OK (routing, anydoc-error-detection, image-extraction, frontmatter, config-fallback)")
+    print("selftest: OK (routing, document page model, image-extraction, frontmatter, config-fallback)")
 
 
 def main() -> None:
@@ -63,6 +73,12 @@ def main() -> None:
     p_web.add_argument("--depth", type=int, default=None)
     p_web.add_argument("--max-pages", type=int, default=None)
 
+    p_wiki = sub.add_parser("wiki", help="batch-crawl a list of URLs into one markdown wiki file per site")
+    p_wiki.add_argument("urls_file", type=Path, help="text file with one seed URL per line")
+    p_wiki.add_argument("output", type=Path)
+    p_wiki.add_argument("--depth", type=int, default=None)
+    p_wiki.add_argument("--max-pages", type=int, default=None)
+
     p_papers = sub.add_parser("papers", help="search and download academic papers")
     p_papers.add_argument("query")
     p_papers.add_argument("output", type=Path)
@@ -76,7 +92,7 @@ def main() -> None:
         return
 
     if not args.command:
-        parser.error("a subcommand is required unless --selftest is passed (dir | web | papers)")
+        parser.error("a subcommand is required unless --selftest is passed (dir | web | wiki | papers)")
 
     config = load_config(args.config)
 
@@ -91,6 +107,14 @@ def main() -> None:
             config.crawl.max_pages = args.max_pages
         failures = pipeline.ingest_web(args.url, args.output, config)
         _report(args.output, failures)
+    elif args.command == "wiki":
+        if args.depth is not None:
+            config.crawl.max_depth = args.depth
+        if args.max_pages is not None:
+            config.crawl.max_pages = args.max_pages
+        urls = [line.strip() for line in args.urls_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        failures = pipeline.ingest_wiki(urls, args.output, config)
+        _report(args.output, failures)
     elif args.command == "papers":
         sources = args.sources.split(",") if args.sources else None
         failures = pipeline.ingest_papers(args.query, args.output, config, sources, args.limit)
@@ -98,9 +122,15 @@ def main() -> None:
 
 
 def _report(output: Path, failures: list[str]) -> None:
-    print(f"Done. Index: {output / 'index.md'}")
+    index_path = output / "index.md"
+    if index_path.exists():
+        print(f"Done. Index: {index_path}")
+    else:
+        print("Nothing was converted — no index.md was written.")
     if failures:
-        print(f"{len(failures)} failure(s) — see {output / 'FAILURES.md'}")
+        print(f"{len(failures)} failure(s):")
+        for f in failures:
+            print(f"  - {f}")
 
 
 if __name__ == "__main__":

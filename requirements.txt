@@ -2,13 +2,20 @@
 litellm
 tomli; python_version < "3.11"   # tomllib is stdlib from 3.11+; needed on 3.10 (MinerU's Windows wheel requires 3.10-3.12)
 
-# Web crawling (`ingest web`) — after installing, run: crawl4ai-setup
+# Document tier 1 (`ingest dir`): fast text-layer extraction + real tables across
+# 100+ formats (PDF/DOCX/PPTX/XLSX/LaTeX/EPUB/email/...), MIT licensed.
+kreuzberg
+pypdf  # splits out just the flagged pages before handing them to mineru (tier 2)
+
+# Web crawling (`ingest web`, `ingest wiki`) — after installing, run: crawl4ai-setup
 crawl4ai
 
 # Paper search + download (`ingest papers`)
 paper-search-mcp
 
-# Directory ingestion (`ingest dir`) also needs these external CLIs, NOT pip-installable:
-#   - Node.js 20+ (for `npx @firecrawl/anydoc`, office docs + text-layer PDFs)
-#   - mineru: pip install "mineru[pipeline]"  (OCR fallback for scanned PDFs, CPU-only backend)
-#     Windows wheel requires Python 3.10-3.12 — use a dedicated venv if your default is 3.13+.
+# Document tier 2, page-scoped OCR fallback for pages tier 1 couldn't read (scanned/
+# chart-heavy pages), NOT pip-installable as a hard requirement of this package:
+#   mineru: pip install "mineru[pipeline]"
+#   Windows wheel requires Python 3.10-3.12 — use a dedicated venv if your default is 3.13+.
+# Tier 3 (VLM, config.toml-driven) is used only if tier 2 is unavailable or still
+# leaves a page short — see config.example.toml.

@@ -71,7 +71,7 @@ changes required:
 
 ```toml
 [vlm.default]
-model = "deepseek/deepseek-vl"
+model = "deepseek/deepseek-v4-flash-vision-exp"
 api_key_env = "DEEPSEEK_API_KEY"
 ```
 

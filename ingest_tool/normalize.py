@@ -74,6 +74,14 @@ def build_index(output_dir: Path, entries: list[tuple[str, Path]]) -> None:
     (output_dir / "index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_document_assets(assets_dir: Path, assets: list[tuple[str, bytes]]) -> None:
+    if not assets:
+        return
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    for filename, data in assets:
+        (assets_dir / filename).write_bytes(data)
+
+
 def write_failures(output_dir: Path, failures: list[str]) -> None:
     if not failures:
         return
