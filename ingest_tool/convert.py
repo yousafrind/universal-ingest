@@ -14,12 +14,21 @@ that small subset to MinerU. This is the fix for the earlier bug where the whole
 Tier 3 (VLM, page-scoped): only reached if MinerU isn't installed, or still leaves a
 page short after OCR. Reuses vlm.py's existing config-swappable litellm client and
 kreuzberg's own render_pdf_page() to get the page image — no new deps.
+
+Figure/table snapshot fallback: kreuzberg's image extraction only pulls embedded
+raster images (JPEG/PNG blobs) — a vector-drawn diagram (TikZ/matplotlib PDF output,
+extremely common in papers) leaves no image at all, even on a page with plenty of
+text, so the "low content" heuristic never catches it either. Verified live: a real
+paper's Figure 2 (a workflow diagram) came back as disconnected label fragments with
+zero image. Any kreuzberg-tier page whose text mentions "Figure N"/"Table N" gets a
+full-page snapshot attached as a blunt but reliable fallback.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +36,8 @@ import tempfile
 from pathlib import Path
 
 from .document import Document, Page
+
+_CAPTION_RE = re.compile(r"\b(?:Figure|Fig\.|Table)\s+\d+\b", re.IGNORECASE)
 
 _WINDOWS = os.name == "nt"
 
@@ -221,10 +232,8 @@ def convert_document(
         return None, err
 
     flagged = doc.low_content_pages(MIN_PAGE_CHARS)
-    if not flagged:
-        return doc, ""
 
-    if tool_available("mineru"):
+    if flagged and tool_available("mineru"):
         page_texts, images_dir, mineru_err = convert_mineru_pages(src, flagged, out_dir, assets_relname)
         if page_texts is not None:
             for page in doc.pages:
@@ -254,4 +263,30 @@ def convert_document(
                 page.text = text
                 page.source = "vlm"
 
+    _attach_figure_snapshots(src, doc, assets_relname)
+
     return doc, ""
+
+
+def _attach_figure_snapshots(src: Path, doc: Document, assets_relname: str) -> None:
+    """Pages still on tier 1 (kreuzberg) whose text mentions a Figure/Table caption
+    get a full-page snapshot attached — tier 1 only pulls embedded raster images, so
+    a vector-drawn diagram leaves no image at all even on a text-rich page. Tier 2/3
+    pages are skipped: MinerU already extracts figures as proper image blocks, and a
+    VLM-transcribed page has no reliable page-image source to re-render from here."""
+    candidates = [p for p in doc.pages if p.source == "kreuzberg" and _CAPTION_RE.search(p.text)]
+    if not candidates:
+        return
+    try:
+        from kreuzberg import render_pdf_page
+    except ImportError:
+        return
+
+    for page in candidates:
+        try:
+            image_bytes = render_pdf_page(str(src), page.index - 1)
+        except Exception:  # noqa: BLE001 - not a PDF, or render failure; skip this page's snapshot
+            continue
+        filename = f"page{page.index}_snapshot.png"
+        doc.assets.append((filename, image_bytes))
+        page.text += f"\n\n![page {page.index} snapshot (contains a figure/table)]({assets_relname}/{filename})\n"
