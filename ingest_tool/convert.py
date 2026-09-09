@@ -231,10 +231,16 @@ def convert_document(
     if doc is None:
         return None, err
 
-    flagged = doc.low_content_pages(MIN_PAGE_CHARS)
-
-    if flagged and tool_available("mineru"):
-        page_texts, images_dir, mineru_err = convert_mineru_pages(src, flagged, out_dir, assets_relname)
+    # Low-content pages (scanned/unreadable) go to MinerU — its proven light case: pure
+    # OCR, one model family. Caption pages (mentions "Figure N"/"Table N") already have
+    # good text from kreuzberg but need real table/equation/figure structure, which is
+    # MinerU's heaviest case (layout + table + formula models loaded simultaneously —
+    # this is what blew out a 30GB-free machine's pagefile). A local VLM (e.g. GLM-OCR
+    # via llama-server) does the same job — real Markdown tables, figures described in
+    # place — as a single lightweight model, so caption pages go there instead.
+    low_content = doc.low_content_pages(MIN_PAGE_CHARS)
+    if low_content and tool_available("mineru"):
+        page_texts, images_dir, mineru_err = convert_mineru_pages(src, low_content, out_dir, assets_relname)
         if page_texts is not None:
             for page in doc.pages:
                 if page.index in page_texts and page_texts[page.index].strip():
@@ -246,13 +252,13 @@ def convert_document(
                 shutil.rmtree(images_dir, ignore_errors=True)
         # If mineru failed outright, fall through to VLM rather than losing the pages.
 
-    still_flagged = doc.low_content_pages(MIN_PAGE_CHARS)
-    if still_flagged and "default" in getattr(config, "vlm", {}):
+    vlm_targets = sorted(set(doc.low_content_pages(MIN_PAGE_CHARS)) | set(_caption_page_indices(doc)))
+    if vlm_targets and "default" in getattr(config, "vlm", {}):
         from . import vlm
         from kreuzberg import render_pdf_page
 
         for page in doc.pages:
-            if page.index not in still_flagged:
+            if page.index not in vlm_targets:
                 continue
             try:
                 image_bytes = render_pdf_page(str(src), page.index - 1)
@@ -268,13 +274,17 @@ def convert_document(
     return doc, ""
 
 
+def _caption_page_indices(doc: Document) -> list[int]:
+    return [p.index for p in doc.pages if p.source == "kreuzberg" and _CAPTION_RE.search(p.text)]
+
+
 def _attach_figure_snapshots(src: Path, doc: Document, assets_relname: str) -> None:
-    """Pages still on tier 1 (kreuzberg) whose text mentions a Figure/Table caption
-    get a full-page snapshot attached — tier 1 only pulls embedded raster images, so
-    a vector-drawn diagram leaves no image at all even on a text-rich page. Tier 2/3
-    pages are skipped: MinerU already extracts figures as proper image blocks, and a
-    VLM-transcribed page has no reliable page-image source to re-render from here."""
-    candidates = [p for p in doc.pages if p.source == "kreuzberg" and _CAPTION_RE.search(p.text)]
+    """Last-resort fallback for pages still on tier 1 (kreuzberg) whose text mentions
+    a Figure/Table caption — reached only when MinerU isn't installed (it's tried
+    first, above, and gives real cropped figures/tables/equations, not a page photo).
+    A full-page snapshot at least means nothing is silently dropped."""
+    wanted = set(_caption_page_indices(doc))
+    candidates = [p for p in doc.pages if p.index in wanted]
     if not candidates:
         return
     try:
