@@ -123,7 +123,10 @@ def ingest_wiki(urls: list[str], output: Path, config: Config) -> list[str]:
             failures.append(f"{url}: crawl returned no pages")
             continue
 
-        site_slug = pages[0]["slug"].split("/")[0] or "site"
+        # Use the full slug, not just the domain - two seed URLs on the same host
+        # (two GitHub repos, two arXiv papers, two posts on one blog) must not collapse
+        # onto the same output file and silently overwrite each other.
+        site_slug = (pages[0]["slug"] or "site").replace("/", "_")
         out_md = output / f"{site_slug}.md"
         assets_dir = output / f"{site_slug}_assets"
 
