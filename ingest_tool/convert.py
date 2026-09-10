@@ -231,17 +231,21 @@ def convert_document(
     if doc is None:
         return None, err
 
-    # Low-content pages (scanned/unreadable) go to MinerU — its proven light case: pure
-    # OCR, one model family. Caption pages (mentions "Figure N"/"Table N") already have
-    # good text from kreuzberg but need real table/equation/figure structure, which is
-    # MinerU's heaviest case (layout + table + formula models loaded simultaneously —
-    # this is what blew out a 30GB-free machine's pagefile). A local VLM (e.g. GLM-OCR
-    # via llama-server) does the same job — real Markdown tables, figures described in
-    # place — as a single lightweight model, so caption pages go there instead.
-    low_content = doc.low_content_pages(MIN_PAGE_CHARS)
-    if low_content and tool_available("mineru"):
-        page_texts, images_dir, mineru_err = convert_mineru_pages(src, low_content, out_dir, assets_relname)
-        if page_texts is not None:
+    # MinerU is the right tool for both low-content (scanned) and caption (figure/table/
+    # equation) pages — real Markdown tables, LaTeX equations, cropped figures — and it's
+    # genuinely fast (~7-8s/page, proven on a 678-page book). But loading its full model
+    # stack (layout + table + formula) for many pages in one subprocess call peaks memory
+    # hard enough to blow out a pagefile on a 30GB-free machine. A local VLM's per-page
+    # CPU inference is far slower in practice, so it's a worse trade — small batches keep
+    # MinerU's speed while capping peak memory instead.
+    MINERU_BATCH_SIZE = 3
+    flagged = sorted(set(doc.low_content_pages(MIN_PAGE_CHARS)) | set(_caption_page_indices(doc)))
+    if flagged and tool_available("mineru"):
+        for i in range(0, len(flagged), MINERU_BATCH_SIZE):
+            batch = flagged[i : i + MINERU_BATCH_SIZE]
+            page_texts, images_dir, mineru_err = convert_mineru_pages(src, batch, out_dir, assets_relname)
+            if page_texts is None:
+                continue  # this batch failed (OOM/crash/etc) - remaining flagged pages fall through to VLM/snapshot
             for page in doc.pages:
                 if page.index in page_texts and page_texts[page.index].strip():
                     page.text = page_texts[page.index]
@@ -250,7 +254,6 @@ def convert_document(
                 for img_path in images_dir.iterdir():
                     doc.assets.append((f"mineru_{img_path.name}", img_path.read_bytes()))
                 shutil.rmtree(images_dir, ignore_errors=True)
-        # If mineru failed outright, fall through to VLM rather than losing the pages.
 
     vlm_targets = sorted(set(doc.low_content_pages(MIN_PAGE_CHARS)) | set(_caption_page_indices(doc)))
     if vlm_targets and "default" in getattr(config, "vlm", {}):
